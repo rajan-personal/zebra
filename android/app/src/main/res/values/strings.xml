@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Zebra App</string>
+    <string name="title_activity_main">Zebra App</string>
+    <string name="package_name">com.zebra.app</string>
+    <string name="custom_url_scheme">com.zebra.app</string>
+</resources>
