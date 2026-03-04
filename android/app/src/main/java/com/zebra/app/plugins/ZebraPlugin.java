@@ -177,9 +177,6 @@ public class ZebraPlugin extends Plugin {
         JSObject result = new JSObject();
         
         try {
-            Log.d(TAG, "=== ZEBRA PLUGIN LOG TEST ===");
-            Log.i(TAG, "Initialization called");
-            Log.w(TAG, "Testing log visibility");
             boolean isZebraDevice = isZebraDevice();
             
             if (isZebraDevice) {
@@ -194,7 +191,6 @@ public class ZebraPlugin extends Plugin {
             result.put("scannerSdkAvailable", scannerSdkAvailable);
             result.put("dataWedgeAvailable", isZebraDevice);
             
-            Log.d(TAG, "Initialization: " + result.toString());
             call.resolve(result);
         } catch (Exception e) {
             Log.e(TAG, "Initialization failed", e);
@@ -649,8 +645,6 @@ public class ZebraPlugin extends Plugin {
      */
     @PluginMethod
     public void discoverPrinters(PluginCall call) {
-        Log.d(TAG, "=== discoverPrinters CALLED ===");
-        
         // Run discovery on background thread and wait for completion
         Executors.newSingleThreadExecutor().execute(() -> {
             JSObject result = new JSObject();

@@ -11,7 +11,6 @@ class ZebraWeb implements ZebraPlugin {
   private connectedPrinter: PrinterInfo | null = null;
 
   async initialize(): Promise<InitResult> {
-    console.log('[ZebraWeb] initialize called');
     await new Promise(r => setTimeout(r, 300));
     return { 
       success: true, 
@@ -21,7 +20,6 @@ class ZebraWeb implements ZebraPlugin {
   }
 
   async startScanning(): Promise<{ success: boolean }> {
-    console.log('[ZebraWeb] startScanning called');
     this.scanning = true;
     
     this.scanInterval = setInterval(() => {
@@ -72,7 +70,6 @@ class ZebraWeb implements ZebraPlugin {
   }
 
   async addListener(eventName: 'barcodeScanned' | 'scannerEvent', listenerFunc: (data: unknown) => void): Promise<{ remove: () => void }> {
-    console.log('[ZebraWeb] addListener called for:', eventName);
     if (!this.listeners.has(eventName)) {
       this.listeners.set(eventName, []);
     }
@@ -91,7 +88,6 @@ class ZebraWeb implements ZebraPlugin {
   }
 
   async discoverPrinters(): Promise<{ printers: PrinterInfo[] }> {
-    console.log('[ZebraWeb] discoverPrinters called - THIS SHOULD NOT APPEAR ON ANDROID');
     return {
       printers: [
         { name: 'Web Demo Printer', address: '127.0.0.1:9100' },
@@ -100,7 +96,6 @@ class ZebraWeb implements ZebraPlugin {
   }
 
   async connectPrinter(options: { address: string }): Promise<{ success: boolean }> {
-    console.log('[ZebraWeb] connectPrinter:', options.address);
     await new Promise(r => setTimeout(r, 500));
     this.connectedPrinter = { name: 'Printer', address: options.address };
     return { success: true };
@@ -115,7 +110,6 @@ class ZebraWeb implements ZebraPlugin {
     if (!this.connectedPrinter) {
       throw new Error('Printer not connected');
     }
-    console.log('[ZebraWeb] Printing ZPL:', options.zpl);
     return { success: true };
   }
 
