@@ -47,7 +47,9 @@ export class ScannerService {
       this.cameraScanner.onScan((result: CameraScanResult) => {
         const barcode: BarcodeResult = {
           data: result.data,
-          timestamp: result.timestamp
+          symbology: result.format || 'UNKNOWN',
+          timestamp: result.timestamp,
+          source: 'camera'
         };
         this.listeners.forEach(cb => cb(barcode));
       });

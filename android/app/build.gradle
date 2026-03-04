@@ -51,15 +51,13 @@ dependencies {
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
     
-    // NOTE: Zebra SDK is not publicly available on Maven.
-    // The app works without it:
-    // - Barcode scanning works via DataWedge intents (pre-installed on Zebra devices)
-    // - Printing works in demo mode (logs to console)
-    // 
-    // To enable full printing functionality:
-    // 1. Download Zebra Link-OS SDK from: https://www.zebra.com/us/en/support-downloads/printer-software/link-os/sdk.html
-    // 2. Extract and copy the JAR files to android/app/libs/
-    // 3. The build will automatically include them
+    // Zebra Scanner SDK (from GitHub - https://github.com/ZebraDevs/Scanner-SDK-for-Android)
+    // Supports Bluetooth cordless scanners (CS60, DS36, RS51, etc.)
+    implementation(name: 'barcode_scanner_library', ext: 'aar')
+    
+    // Zebra Link-OS SDK (from ZSDKRCTDevDemo - https://github.com/ZebraDevs/Zebra-Printer-Samples/tree/ZSDKRCTDevDemo)
+    // Supports network/Bluetooth printing, printer status, discovery
+    implementation files('libs/ZSDK_ANDROID_API.jar')
 }
 
 apply from: 'capacitor.build.gradle'

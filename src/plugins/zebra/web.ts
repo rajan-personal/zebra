@@ -35,6 +35,7 @@ class ZebraWeb implements ZebraPlugin {
       
       const barcode: BarcodeResult = {
         data: barcodes[Math.floor(Math.random() * barcodes.length)],
+        symbology: 'CODE_128',
         timestamp: Date.now()
       };
       
@@ -53,12 +54,36 @@ class ZebraWeb implements ZebraPlugin {
     return { success: true };
   }
 
-  async addListener(event: string, callback: (data: unknown) => void): Promise<void> {
-    console.log('[ZebraWeb] addListener called for:', event);
-    if (!this.listeners.has(event)) {
-      this.listeners.set(event, []);
+  // Bluetooth scanner stubs (not available on web)
+  async discoverScanners(): Promise<{ success: boolean; scanners: never[]; count: number; message: string }> {
+    return { success: false, scanners: [], count: 0, message: 'Bluetooth scanners not available on web' };
+  }
+
+  async connectScanner(): Promise<{ success: boolean; message: string }> {
+    return { success: false, message: 'Bluetooth scanners not available on web' };
+  }
+
+  async disconnectScanner(): Promise<{ success: boolean; message: string }> {
+    return { success: false, message: 'Bluetooth scanners not available on web' };
+  }
+
+  async isScannerConnected(): Promise<{ connected: boolean; sdkAvailable: boolean }> {
+    return { connected: false, sdkAvailable: false };
+  }
+
+  async addListener(eventName: 'barcodeScanned' | 'scannerEvent', listenerFunc: (data: unknown) => void): Promise<{ remove: () => void }> {
+    console.log('[ZebraWeb] addListener called for:', eventName);
+    if (!this.listeners.has(eventName)) {
+      this.listeners.set(eventName, []);
     }
-    this.listeners.get(event)!.push(callback);
+    this.listeners.get(eventName)?.push(listenerFunc);
+    return { remove: () => {
+      const arr = this.listeners.get(eventName);
+      if (arr) {
+        const idx = arr.indexOf(listenerFunc);
+        if (idx >= 0) arr.splice(idx, 1);
+      }
+    }};
   }
 
   async removeAllListeners(): Promise<void> {
@@ -92,6 +117,14 @@ class ZebraWeb implements ZebraPlugin {
     }
     console.log('[ZebraWeb] Printing ZPL:', options.zpl);
     return { success: true };
+  }
+
+  async isPrinterConnected(): Promise<{ connected: boolean }> {
+    return { connected: this.connectedPrinter !== null };
+  }
+
+  async getPrinterStatus(): Promise<{ isReady: boolean; isPaused: boolean; isHeadOpen: boolean; isPaperOut: boolean; isRibbonOut: boolean }> {
+    return { isReady: true, isPaused: false, isHeadOpen: false, isPaperOut: false, isRibbonOut: false };
   }
 }
 

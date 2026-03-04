@@ -34,10 +34,13 @@ import android.os.Looper;
 /**
  * Capacitor plugin for Zebra barcode scanning and printing
  * 
- * Uses DataWedge intents for barcode scanning (works on all Zebra devices)
- * Printing works in demo mode without Zebra SDK (logs to console)
+ * Scanning:
+ * - Zebra devices: DataWedge intents
+ * - Bluetooth cordless scanners: Zebra Scanner SDK
  * 
- * For full printing support, add Zebra Link-OS SDK JAR files to libs folder
+ * Printing:
+ * - Zebra Link-OS SDK for network/Bluetooth printing with status support
+ * - Falls back to raw TCP socket printing when SDK not available
  */
 @CapacitorPlugin(
     name = "ZebraPlugin",
@@ -61,6 +64,14 @@ public class ZebraPlugin extends Plugin {
     // Shorthand reference to config
     private static final String TAG = ZebraConfig.LOG_TAG;
     
+    // Scanner SDK helper (for Bluetooth cordless scanners)
+    private ScannerSDKHelper scannerSdkHelper = null;
+    private boolean scannerSdkAvailable = false;
+    
+    // Link-OS SDK helper (for printing)
+    private LinkOSHelper linkOsHelper = null;
+    private boolean linkOsAvailable = false;
+    
     // State
     private boolean isScanning = false;
     private BroadcastReceiver scanReceiver = null;
@@ -75,13 +86,80 @@ public class ZebraPlugin extends Plugin {
         super.load();
         setupDataWedgeReceiver();
         mainHandler = new Handler(Looper.getMainLooper());
-        Log.d(TAG, "ZebraPlugin loaded");
+        
+        // Initialize Link-OS SDK for printing
+        if (LinkOSHelper.isSdkAvailable()) {
+            linkOsHelper = new LinkOSHelper(getContext());
+            linkOsAvailable = true;
+            Log.d(TAG, "Link-OS SDK initialized for printing");
+        }
+        
+        // Initialize Scanner SDK if available
+        if (ScannerSDKHelper.isSdkAvailable()) {
+            scannerSdkHelper = new ScannerSDKHelper(getContext());
+            scannerSdkAvailable = scannerSdkHelper.initialize();
+            if (scannerSdkAvailable) {
+                scannerSdkHelper.setBarcodeListener((barcodeData, barcodeType, scannerId) -> {
+                    JSObject scanResult = new JSObject();
+                    scanResult.put("data", barcodeData);
+                    scanResult.put("symbology", barcodeType);
+                    scanResult.put("timestamp", System.currentTimeMillis());
+                    scanResult.put("scannerId", scannerId);
+                    scanResult.put("source", "bluetooth_scanner");
+                    notifyListeners("barcodeScanned", scanResult);
+                });
+                scannerSdkHelper.setConnectionListener(new ScannerSDKHelper.ScannerConnectionListener() {
+                    @Override
+                    public void onScannerConnected(String scannerName, int scannerId) {
+                        JSObject event = new JSObject();
+                        event.put("event", "scannerConnected");
+                        event.put("scannerName", scannerName);
+                        event.put("scannerId", scannerId);
+                        notifyListeners("scannerEvent", event);
+                    }
+                    
+                    @Override
+                    public void onScannerDisconnected(int scannerId) {
+                        JSObject event = new JSObject();
+                        event.put("event", "scannerDisconnected");
+                        event.put("scannerId", scannerId);
+                        notifyListeners("scannerEvent", event);
+                    }
+                    
+                    @Override
+                    public void onScannerAppeared(String scannerName, int scannerId) {
+                        JSObject event = new JSObject();
+                        event.put("event", "scannerAppeared");
+                        event.put("scannerName", scannerName);
+                        event.put("scannerId", scannerId);
+                        notifyListeners("scannerEvent", event);
+                    }
+                    
+                    @Override
+                    public void onScannerDisappeared(int scannerId) {
+                        JSObject event = new JSObject();
+                        event.put("event", "scannerDisappeared");
+                        event.put("scannerId", scannerId);
+                        notifyListeners("scannerEvent", event);
+                    }
+                });
+                Log.d(TAG, "Zebra Scanner SDK initialized successfully");
+            }
+        }
+        
+        Log.d(TAG, "ZebraPlugin loaded (Scanner SDK: " + scannerSdkAvailable + ")");
     }
     
     @Override
     protected void handleOnDestroy() {
         super.handleOnDestroy();
         stopScanSimulation();
+        if (scannerSdkHelper != null) {
+            scannerSdkHelper.destroy();
+        }
+        if (linkOsHelper != null) {
+            linkOsHelper.destroy();
+        }
         if (scanReceiver != null && getContext() != null) {
             try {
                 getContext().unregisterReceiver(scanReceiver);
@@ -113,7 +191,7 @@ public class ZebraPlugin extends Plugin {
             
             result.put("success", true);
             result.put("isZebraDevice", isZebraDevice);
-            result.put("sdkAvailable", false);
+            result.put("scannerSdkAvailable", scannerSdkAvailable);
             result.put("dataWedgeAvailable", isZebraDevice);
             
             Log.d(TAG, "Initialization: " + result.toString());
@@ -134,7 +212,13 @@ public class ZebraPlugin extends Plugin {
         JSObject result = new JSObject();
         
         try {
-            if (isZebraDevice()) {
+            // Priority: 1. Scanner SDK (Bluetooth scanner), 2. DataWedge, 3. Simulation
+            if (scannerSdkAvailable && scannerSdkHelper != null && scannerSdkHelper.isConnected()) {
+                // Use Bluetooth scanner via Scanner SDK
+                result.put("mode", "bluetooth_scanner");
+                result.put("scannerName", scannerSdkHelper.getConnectedScannerName());
+                Log.d(TAG, "Using Bluetooth scanner: " + scannerSdkHelper.getConnectedScannerName());
+            } else if (isZebraDevice()) {
                 // Start DataWedge scanning via intent
                 Intent intent = new Intent();
                 intent.setAction(ZebraConfig.DATAWEDGE_SEND_ACTION);
@@ -249,15 +333,151 @@ public class ZebraPlugin extends Plugin {
         }
     }
     
+    /**
+     * Discover Bluetooth scanners (requires Scanner SDK)
+     */
+    @PluginMethod
+    public void discoverScanners(PluginCall call) {
+        JSObject result = new JSObject();
+        
+        if (!scannerSdkAvailable || scannerSdkHelper == null) {
+            result.put("success", false);
+            result.put("message", "Scanner SDK not available");
+            result.put("scanners", new JSArray());
+            call.resolve(result);
+            return;
+        }
+        
+        try {
+            List<com.zebra.scannercontrol.DCSScannerInfo> scanners = scannerSdkHelper.getAvailableScanners();
+            JSArray scannersArray = new JSArray();
+            
+            for (com.zebra.scannercontrol.DCSScannerInfo info : scanners) {
+                JSObject scanner = new JSObject();
+                scanner.put("id", info.getScannerID());
+                scanner.put("name", info.getScannerName());
+                scanner.put("address", info.getScannerHWSerialNumber());
+                scanner.put("type", info.getConnectionType().ordinal());
+                scanner.put("isConnected", info.isActive());
+                scannersArray.put(scanner);
+            }
+            
+            result.put("success", true);
+            result.put("scanners", scannersArray);
+            result.put("count", scanners.size());
+            call.resolve(result);
+        } catch (Exception e) {
+            Log.e(TAG, "Error discovering scanners", e);
+            result.put("success", false);
+            result.put("message", "Error: " + e.getMessage());
+            result.put("scanners", new JSArray());
+            call.resolve(result);
+        }
+    }
+    
+    /**
+     * Connect to a Bluetooth scanner
+     */
+    @PluginMethod
+    public void connectScanner(PluginCall call) {
+        Integer scannerId = call.getInt("scannerId", -1);
+        
+        JSObject result = new JSObject();
+        
+        if (!scannerSdkAvailable || scannerSdkHelper == null) {
+            result.put("success", false);
+            result.put("message", "Scanner SDK not available");
+            call.resolve(result);
+            return;
+        }
+        
+        if (scannerId == -1) {
+            result.put("success", false);
+            result.put("message", "Scanner ID is required");
+            call.resolve(result);
+            return;
+        }
+        
+        try {
+            boolean connected = scannerSdkHelper.connect(scannerId);
+            if (connected) {
+                result.put("success", true);
+                result.put("message", "Connecting to scanner...");
+                result.put("scannerId", scannerId);
+            } else {
+                result.put("success", false);
+                result.put("message", "Failed to initiate connection");
+            }
+            call.resolve(result);
+        } catch (Exception e) {
+            Log.e(TAG, "Error connecting to scanner", e);
+            result.put("success", false);
+            result.put("message", "Error: " + e.getMessage());
+            call.resolve(result);
+        }
+    }
+    
+    /**
+     * Disconnect from Bluetooth scanner
+     */
+    @PluginMethod
+    public void disconnectScanner(PluginCall call) {
+        JSObject result = new JSObject();
+        
+        if (!scannerSdkAvailable || scannerSdkHelper == null) {
+            result.put("success", false);
+            result.put("message", "Scanner SDK not available");
+            call.resolve(result);
+            return;
+        }
+        
+        try {
+            boolean disconnected = scannerSdkHelper.disconnect();
+            result.put("success", disconnected);
+            result.put("message", disconnected ? "Scanner disconnected" : "No scanner connected");
+            call.resolve(result);
+        } catch (Exception e) {
+            Log.e(TAG, "Error disconnecting scanner", e);
+            result.put("success", false);
+            result.put("message", "Error: " + e.getMessage());
+            call.resolve(result);
+        }
+    }
+    
+    /**
+     * Check if Bluetooth scanner is connected
+     */
+    @PluginMethod
+    public void isScannerConnected(PluginCall call) {
+        JSObject result = new JSObject();
+        
+        if (!scannerSdkAvailable || scannerSdkHelper == null) {
+            result.put("connected", false);
+            result.put("sdkAvailable", false);
+            call.resolve(result);
+            return;
+        }
+        
+        result.put("connected", scannerSdkHelper.isConnected());
+        result.put("sdkAvailable", true);
+        if (scannerSdkHelper.isConnected()) {
+            result.put("scannerName", scannerSdkHelper.getConnectedScannerName());
+            result.put("scannerId", scannerSdkHelper.getConnectedScannerId());
+        }
+        call.resolve(result);
+    }
+    
 
     
     /**
-     * Connect to a Zebra printer (demo mode)
+     * Connect to a Zebra printer
+     * Uses Link-OS SDK for Bluetooth only (network uses direct TCP - faster)
      */
     @PluginMethod
     public void connectPrinter(PluginCall call) {
         String address = call.getString("address", "");
         String name = call.getString("name", "Printer");
+        String type = call.getString("type", "network"); // network or bluetooth
         
         JSObject result = new JSObject();
         
@@ -268,12 +488,35 @@ public class ZebraPlugin extends Plugin {
             return;
         }
         
-        // Demo mode - just store the connection info
+        // For Bluetooth, use Link-OS SDK
+        if ("bluetooth".equals(type) && linkOsAvailable && linkOsHelper != null) {
+            boolean connected = linkOsHelper.connectBluetooth(address);
+            
+            if (connected) {
+                connectedPrinterAddress = address;
+                connectedPrinterName = name;
+                
+                result.put("success", true);
+                result.put("message", "Connected to " + name + " (Link-OS SDK)");
+                result.put("method", "linkos");
+                result.put("language", linkOsHelper.getPrinterLanguage());
+                call.resolve(result);
+                return;
+            }
+            
+            result.put("success", false);
+            result.put("message", "Failed to connect via Bluetooth");
+            call.resolve(result);
+            return;
+        }
+        
+        // For network printers, use direct TCP socket (faster - no SDK overhead)
         connectedPrinterAddress = address;
         connectedPrinterName = name;
         
         result.put("success", true);
-        result.put("message", "Connected to " + name + " (Demo Mode)");
+        result.put("message", "Connected to " + name + " (TCP Socket)");
+        result.put("method", "tcp_socket");
         call.resolve(result);
     }
     
@@ -282,6 +525,11 @@ public class ZebraPlugin extends Plugin {
      */
     @PluginMethod
     public void disconnectPrinter(PluginCall call) {
+        // Disconnect via Link-OS SDK
+        if (linkOsHelper != null) {
+            linkOsHelper.disconnect();
+        }
+        
         connectedPrinterAddress = null;
         connectedPrinterName = null;
         
@@ -323,7 +571,8 @@ public class ZebraPlugin extends Plugin {
     }
     
     /**
-     * Print ZPL content directly via TCP socket
+     * Print ZPL content directly
+     * Uses Link-OS SDK for Bluetooth, raw TCP socket for network
      */
     @PluginMethod
     public void printZPL(PluginCall call) {
@@ -331,22 +580,37 @@ public class ZebraPlugin extends Plugin {
         
         JSObject result = new JSObject();
         
-        if (connectedPrinterAddress == null) {
+        // Capture address BEFORE any async operations (prevents race condition)
+        final String printerAddress = connectedPrinterAddress;
+        final String printerName = connectedPrinterName;
+        
+        if (printerAddress == null) {
             result.put("success", false);
             result.put("message", "No printer connected");
             call.resolve(result);
             return;
         }
         
-        // Send ZPL via TCP socket in background thread
+        // Use Link-OS SDK for Bluetooth printers
+        if (linkOsAvailable && linkOsHelper != null && linkOsHelper.isConnected()) {
+            boolean success = linkOsHelper.printZPL(zpl);
+            
+            result.put("success", success);
+            result.put("message", success ? "ZPL sent via Link-OS SDK" : "Failed to print via Link-OS SDK");
+            result.put("method", "linkos");
+            call.resolve(result);
+            return;
+        }
+        
+        // Use raw TCP socket for network printers
         Executors.newSingleThreadExecutor().execute(() -> {
             try {
-                String host = connectedPrinterAddress;
-                int port = 9100;
+                String host = printerAddress;  // Use captured value
+                int port = ZebraConfig.PRINTER_PORT;
                 
                 // Parse host:port format
-                if (connectedPrinterAddress.contains(":")) {
-                    String[] parts = connectedPrinterAddress.split(":");
+                if (printerAddress.contains(":")) {
+                    String[] parts = printerAddress.split(":");
                     host = parts[0];
                     port = Integer.parseInt(parts[1]);
                 }
@@ -366,6 +630,7 @@ public class ZebraPlugin extends Plugin {
                 JSObject successResult = new JSObject();
                 successResult.put("success", true);
                 successResult.put("message", "ZPL sent to printer");
+                successResult.put("method", "tcp_socket");
                 call.resolve(successResult);
                 
             } catch (Exception e) {
@@ -617,34 +882,52 @@ public class ZebraPlugin extends Plugin {
     
     /**
      * Get printer status
+     * Uses Link-OS SDK for real status if connected
      */
     @PluginMethod
     public void getPrinterStatus(PluginCall call) {
         JSObject result = new JSObject();
         
+        // Try Link-OS SDK for real status
+        if (linkOsAvailable && linkOsHelper != null && linkOsHelper.isConnected()) {
+            try {
+                org.json.JSONObject status = linkOsHelper.getPrinterStatus();
+                result.put("isReady", status.optBoolean("isReadyToPrint", false));
+                result.put("isPaused", status.optBoolean("isPaused", false));
+                result.put("isHeadOpen", status.optBoolean("isHeadOpen", false));
+                result.put("isPaperOut", status.optBoolean("isPaperOut", false));
+                result.put("isRibbonOut", status.optBoolean("isRibbonOut", false));
+                result.put("isReceiveBufferFull", status.optBoolean("isReceiveBufferFull", false));
+                result.put("labelsRemaining", status.optInt("labelsRemainingInBatch", 0));
+                result.put("method", "linkos");
+                call.resolve(result);
+                return;
+            } catch (Exception e) {
+                Log.e(TAG, "Error getting Link-OS status", e);
+            }
+        }
+        
+        // Fallback - basic status based on connection state
         if (connectedPrinterAddress == null) {
             result.put("isReady", false);
             result.put("isPaused", false);
             result.put("isHeadOpen", false);
             result.put("isPaperOut", true);
             result.put("isRibbonOut", false);
-            
-            JSArray messages = new JSArray();
-            messages.put("No printer connected");
-            result.put("messages", messages);
+            result.put("isReceiveBufferFull", false);
+            result.put("labelsRemaining", 0);
+            result.put("method", "not_connected");
         } else {
-            // Demo mode - always ready
+            // Assume ready if connected via TCP socket
             result.put("isReady", true);
             result.put("isPaused", false);
             result.put("isHeadOpen", false);
             result.put("isPaperOut", false);
             result.put("isRibbonOut", false);
-            
-            JSArray messages = new JSArray();
-            messages.put("Printer ready (Demo Mode)");
-            result.put("messages", messages);
+            result.put("isReceiveBufferFull", false);
+            result.put("labelsRemaining", 0);
+            result.put("method", "tcp_socket");
         }
-        
         call.resolve(result);
     }
     

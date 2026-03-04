@@ -17,6 +17,8 @@ export default function Home() {
   const [isConnected, setIsConnected] = useState(false);
   const [message, setMessage] = useState('');
   const [isDiscovering, setIsDiscovering] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
 
   useEffect(() => {
     const init = async () => {
@@ -53,7 +55,7 @@ export default function Home() {
     setMessage('Scanning for printers...');
     
     const discovered = await printerRef.current?.discover() ?? [];
-    console.log('discover() returned:', discovered);
+
     setPrinters(discovered);
     
     setTimeout(() => {
@@ -177,13 +179,20 @@ export default function Home() {
             <div className="space-y-2">
               <button
                 onClick={async () => {
-                  await printerRef.current?.disconnect();
-                  setIsConnected(false);
-                  setMessage('Disconnected');
+                  if (isDisconnecting) return;
+                  setIsDisconnecting(true);
+                  try {
+                    await printerRef.current?.disconnect();
+                    setIsConnected(false);
+                    setMessage('Disconnected');
+                  } finally {
+                    setIsDisconnecting(false);
+                  }
                 }}
-                className="w-full py-2 bg-red-600 rounded"
+                disabled={isDisconnecting}
+                className={`w-full py-2 rounded ${isDisconnecting ? 'bg-gray-500' : 'bg-red-600'}`}
               >
-                Disconnect
+                {isDisconnecting ? 'Disconnecting...' : 'Disconnect'}
               </button>
               <button
                 onClick={async () => {
@@ -205,18 +214,25 @@ export default function Home() {
                 id="printer-ip-input"
               />
               <button
-                onClick={() => {
+                onClick={async () => {
                   const input = document.getElementById('printer-ip-input') as HTMLInputElement;
                   const ip = input?.value?.trim();
                   if (ip) {
-                    connectPrinter(ip);
+                    if (isConnecting) return;
+                    setIsConnecting(true);
+                    try {
+                      await connectPrinter(ip);
+                    } finally {
+                      setIsConnecting(false);
+                    }
                   } else {
                     setMessage('Please enter printer IP');
                   }
                 }}
-                className="w-full py-2 bg-blue-600 rounded"
+                disabled={isConnecting}
+                className={`w-full py-2 rounded ${isConnecting ? 'bg-gray-500' : 'bg-blue-600'}`}
               >
-                Connect to IP
+                {isConnecting ? 'Connecting...' : 'Connect to IP'}
               </button>
               
               {/* Discovered printers */}
