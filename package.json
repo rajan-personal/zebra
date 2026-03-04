@@ -14,8 +14,10 @@
   },
   "dependencies": {
     "@capacitor/android": "^8.1.0",
+    "@capacitor/camera": "^8.0.1",
     "@capacitor/cli": "^8.1.0",
     "@capacitor/core": "^8.1.0",
+    "html5-qrcode": "^2.3.8",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3"

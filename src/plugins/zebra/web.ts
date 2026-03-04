@@ -11,15 +11,17 @@ class ZebraWeb implements ZebraPlugin {
   private connectedPrinter: PrinterInfo | null = null;
 
   async initialize(): Promise<InitResult> {
+    console.log('[ZebraWeb] initialize called');
     await new Promise(r => setTimeout(r, 300));
     return { 
       success: true, 
-      message: 'Demo Mode',
+      message: 'Web Demo Mode',
       isZebraDevice: false 
     };
   }
 
   async startScanning(): Promise<{ success: boolean }> {
+    console.log('[ZebraWeb] startScanning called');
     this.scanning = true;
     
     this.scanInterval = setInterval(() => {
@@ -52,6 +54,7 @@ class ZebraWeb implements ZebraPlugin {
   }
 
   async addListener(event: string, callback: (data: unknown) => void): Promise<void> {
+    console.log('[ZebraWeb] addListener called for:', event);
     if (!this.listeners.has(event)) {
       this.listeners.set(event, []);
     }
@@ -63,15 +66,16 @@ class ZebraWeb implements ZebraPlugin {
   }
 
   async discoverPrinters(): Promise<{ printers: PrinterInfo[] }> {
+    console.log('[ZebraWeb] discoverPrinters called - THIS SHOULD NOT APPEAR ON ANDROID');
     return {
       printers: [
-        { name: 'Zebra ZD410', address: '192.168.1.100:9100' },
-        { name: 'Zebra QLn320', address: '00:11:22:33:44:55' },
+        { name: 'Web Demo Printer', address: '127.0.0.1:9100' },
       ]
     };
   }
 
   async connectPrinter(options: { address: string }): Promise<{ success: boolean }> {
+    console.log('[ZebraWeb] connectPrinter:', options.address);
     await new Promise(r => setTimeout(r, 500));
     this.connectedPrinter = { name: 'Printer', address: options.address };
     return { success: true };
@@ -86,11 +90,14 @@ class ZebraWeb implements ZebraPlugin {
     if (!this.connectedPrinter) {
       throw new Error('Printer not connected');
     }
-    console.log('[Zebra Web] Printing ZPL:', options.zpl);
+    console.log('[ZebraWeb] Printing ZPL:', options.zpl);
     return { success: true };
   }
 }
 
-// Register web implementation
-import { registerPlugin } from '@capacitor/core';
-registerPlugin('ZebraPlugin', { web: new ZebraWeb() });
+// Only register web implementation for web platform (not Android)
+if (typeof window !== 'undefined' && !(window as any).capacitorPlugins) {
+  import('@capacitor/core').then(({ registerPlugin }) => {
+    registerPlugin('ZebraPlugin', { web: new ZebraWeb() });
+  });
+}

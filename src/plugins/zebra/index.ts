@@ -5,11 +5,6 @@
 import { registerPlugin } from '@capacitor/core';
 
 // Types
-export interface BarcodeResult {
-  data: string;
-  timestamp: number;
-}
-
 export interface InitResult {
   success: boolean;
   message: string;
@@ -26,12 +21,12 @@ export interface ZebraPlugin {
   initialize(): Promise<InitResult>;
   startScanning(): Promise<{ success: boolean }>;
   stopScanning(): Promise<{ success: boolean }>;
-  addListener(event: string, callback: (data: unknown) => void): Promise<void>;
-  removeAllListeners(): Promise<void>;
   discoverPrinters(): Promise<{ printers: PrinterInfo[] }>;
-  connectPrinter(options: { address: string }): Promise<{ success: boolean }>;
+  connectPrinter(options: { address: string; name?: string }): Promise<{ success: boolean; message?: string }>;
   disconnectPrinter(): Promise<{ success: boolean }>;
-  printZPL(options: { zpl: string }): Promise<{ success: boolean }>;
+  printZPL(options: { zpl: string }): Promise<{ success: boolean; message?: string }>;
+  isPrinterConnected(): Promise<{ connected: boolean }>;
+  getPrinterStatus(): Promise<{ isReady: boolean; isPaused: boolean; isHeadOpen: boolean; isPaperOut: boolean; isRibbonOut: boolean; messages?: string[] }>;
 }
 
 // Register plugin

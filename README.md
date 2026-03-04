@@ -208,6 +208,58 @@ If scanning doesn't work:
 2. Check that "ZebraApp" profile exists and is enabled
 3. Verify the profile is associated with com.zebra.app
 
+## Configuration
+
+All configurable settings are centralized in `android/app/src/main/java/com/zebra/app/plugins/ZebraConfig.java`.
+
+### Debug Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `DEBUG` | `true` | Enable/disable debug logging |
+| `LOG_TAG` | `"ZebraPlugin"` | Log tag for all plugin messages |
+
+### DataWedge Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `DATAWEDGE_SEND_ACTION` | `"com.symbol.datawedge.api.ACTION"` | DataWedge API action for sending commands |
+| `DATAWEDGE_SCAN_ACTION` | `"com.zebra.app.SCAN"` | Intent action for receiving scan results |
+| `DATAWEDGE_PROFILE_NAME` | `"ZebraApp"` | DataWedge profile name for this app |
+
+### Network Printer Discovery Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `PRINTER_PORT` | `9100` | Port for ZPL/raw printing (Zebra default) |
+| `NETWORK_SCAN_THREADS` | `64` | Number of threads for parallel network scanning |
+| `SOCKET_TIMEOUT_MS` | `1000` | Socket connection timeout in milliseconds |
+| `NETWORK_SCAN_TIMEOUT_SECONDS` | `8` | Maximum time to wait for network scan completion |
+| `WIFI_WAKEUP_HOST` | `"google.com"` | Host to ping for waking WiFi radio |
+| `PING_COMMAND_FORMAT` | `"ping -c 1 -W 1 %s"` | Ping command format string |
+
+### Device Detection Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `ZEBRA_MODEL_PREFIXES` | `["tc", "mc", "et", "zt", "zd", "ws"]` | Zebra device model prefixes |
+| `ZEBRA_MANUFACTURERS` | `["zebra", "symbol"]` | Zebra manufacturer names |
+
+### Barcode Patterns
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `ZEBRA_CONFIG_PATTERNS` | `["!ZEBRA", "$ZEBRA", "ZEBRA-CFG", "~ZEBRA", "^ZEBRA"]` | Special Zebra configuration barcode patterns |
+
+### Scan Simulation Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `SCAN_SIMULATION_INTERVAL_MS` | `3000` | Interval between simulated scans (ms) |
+| `SCAN_SIMULATION_START_DELAY_MS` | `2000` | Initial delay before starting simulation (ms) |
+| `PRINT_SOCKET_TIMEOUT_MS` | `5000` | Socket timeout for ZPL printing (ms) |
+| `DEMO_BARCODE_PREFIXES` | `["PROD-", "SKU", "ITEM-"]` | Demo barcode prefixes for simulation |
+
 ## App Features
 
 ### Barcode Scanning
@@ -264,12 +316,10 @@ npm run android:run
 | `initialize()` | Initialize the Zebra SDK |
 | `startScanning()` | Start barcode scanner |
 | `stopScanning()` | Stop barcode scanner |
-| `addListener(event, callback)` | Add event listener |
 | `connectPrinter(options)` | Connect to a printer |
 | `disconnectPrinter()` | Disconnect from printer |
-| `print(options)` | Print content |
 | `printZPL({ zpl })` | Print ZPL commands |
-| `discoverPrinters()` | Discover available printers |
+| `discoverPrinters()` | Discover available printers (returns printers directly) |
 | `isPrinterConnected()` | Check printer connection |
 | `getPrinterStatus()` | Get printer status |
 
@@ -278,7 +328,6 @@ npm run android:run
 | Event | Description |
 |-------|-------------|
 | `barcodeScanned` | Fired when a barcode is scanned |
-| `printerDiscovered` | Fired when a printer is discovered |
 
 ## Troubleshooting
 

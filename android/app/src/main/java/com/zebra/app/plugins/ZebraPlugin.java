@@ -13,7 +13,6 @@ import android.os.Bundle;
 import android.util.Log;
 
 import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -22,11 +21,12 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
-import com.getcapacitor.annotation.PermissionCallback;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.net.Socket;
+import java.io.OutputStream;
+import java.util.concurrent.Executors;
 
 import android.os.Handler;
 import android.os.Looper;
@@ -58,17 +58,8 @@ import android.os.Looper;
     }
 )
 public class ZebraPlugin extends Plugin {
-    private static final String TAG = "ZebraPlugin";
-    private static final boolean DEBUG = true;
-    
-    // DataWedge action and intent filters
-    private static final String DATAWEDGE_SEND_ACTION = "com.symbol.datawedge.api.ACTION";
-    private static final String DATAWEDGE_SCAN_ACTION = "com.zebra.app.SCAN";
-    
-    // Special Zebra barcode patterns
-    private static final String[] ZEBRA_CONFIG_PATTERNS = {
-        "!ZEBRA", "$ZEBRA", "ZEBRA-CFG", "~ZEBRA", "^ZEBRA"
-    };
+    // Shorthand reference to config
+    private static final String TAG = ZebraConfig.LOG_TAG;
     
     // State
     private boolean isScanning = false;
@@ -146,7 +137,7 @@ public class ZebraPlugin extends Plugin {
             if (isZebraDevice()) {
                 // Start DataWedge scanning via intent
                 Intent intent = new Intent();
-                intent.setAction(DATAWEDGE_SEND_ACTION);
+                intent.setAction(ZebraConfig.DATAWEDGE_SEND_ACTION);
                 intent.putExtra("com.symbol.datawedge.api.SOFT_SCAN_TRIGGER", "START_SCANNING");
                 getContext().sendBroadcast(intent);
                 result.put("mode", "datawedge");
@@ -183,13 +174,13 @@ public class ZebraPlugin extends Plugin {
                     return;
                 }
                 
-                // Generate random barcodes
+                // Generate random barcodes using config prefixes
                 String[] demoBarcodes = {
-                    "PROD-" + String.format("%06d", ++scanCounter),
-                    "SKU" + String.format("%09d", System.currentTimeMillis() % 1000000000),
+                    ZebraConfig.DEMO_BARCODE_PREFIXES[0] + String.format("%06d", ++scanCounter),
+                    ZebraConfig.DEMO_BARCODE_PREFIXES[1] + String.format("%09d", System.currentTimeMillis() % 1000000000),
                     "5901234" + String.format("%06d", scanCounter),
                     "ABC" + System.currentTimeMillis() % 100000,
-                    "ITEM-" + String.format("%04d", scanCounter),
+                    ZebraConfig.DEMO_BARCODE_PREFIXES[2] + String.format("%04d", scanCounter),
                 };
                 
                 String[] symbologies = {"CODE128", "EAN-13", "CODE39", "UPC-A", "QR"};
@@ -207,16 +198,16 @@ public class ZebraPlugin extends Plugin {
                 Log.d(TAG, "Simulated scan: " + barcodeData + " (" + symbology + ")");
                 notifyListeners("barcodeScanned", scanResult);
                 
-                // Schedule next scan in 3 seconds
+                // Schedule next scan
                 if (isScanning && mainHandler != null) {
-                    mainHandler.postDelayed(this, 3000);
+                    mainHandler.postDelayed(this, ZebraConfig.SCAN_SIMULATION_INTERVAL_MS);
                 }
             }
         };
         
-        // Start after 2 seconds
+        // Start after configured delay
         if (mainHandler != null) {
-            mainHandler.postDelayed(scanSimulationRunnable, 2000);
+            mainHandler.postDelayed(scanSimulationRunnable, ZebraConfig.SCAN_SIMULATION_START_DELAY_MS);
         }
     }
     
@@ -240,7 +231,7 @@ public class ZebraPlugin extends Plugin {
         try {
             if (isZebraDevice()) {
                 Intent intent = new Intent();
-                intent.setAction(DATAWEDGE_SEND_ACTION);
+                intent.setAction(ZebraConfig.DATAWEDGE_SEND_ACTION);
                 intent.putExtra("com.symbol.datawedge.api.SOFT_SCAN_TRIGGER", "STOP_SCANNING");
                 getContext().sendBroadcast(intent);
             } else {
@@ -258,35 +249,7 @@ public class ZebraPlugin extends Plugin {
         }
     }
     
-    /**
-     * Add barcode listener - notifies on barcode scan
-     */
-    @PluginMethod
-    public void addBarcodeListener(PluginCall call) {
-        JSObject result = new JSObject();
-        result.put("success", true);
-        call.resolve(result);
-    }
-    
-    /**
-     * Remove barcode listener
-     */
-    @PluginMethod
-    public void removeBarcodeListener(PluginCall call) {
-        JSObject result = new JSObject();
-        result.put("success", true);
-        call.resolve(result);
-    }
-    
-    /**
-     * Generic add listener method
-     */
-    @PluginMethod
-    public void addListener(PluginCall call) {
-        JSObject result = new JSObject();
-        result.put("success", true);
-        call.resolve(result);
-    }
+
     
     /**
      * Connect to a Zebra printer (demo mode)
@@ -360,7 +323,7 @@ public class ZebraPlugin extends Plugin {
     }
     
     /**
-     * Print ZPL content directly (demo mode)
+     * Print ZPL content directly via TCP socket
      */
     @PluginMethod
     public void printZPL(PluginCall call) {
@@ -375,80 +338,272 @@ public class ZebraPlugin extends Plugin {
             return;
         }
         
-        // Demo mode - just log the ZPL
-        Log.d(TAG, "=== ZPL PRINT (Demo Mode) ===");
-        Log.d(TAG, "Printer: " + connectedPrinterName + " (" + connectedPrinterAddress + ")");
-        Log.d(TAG, "ZPL:\n" + zpl);
-        Log.d(TAG, "=============================");
-        
-        result.put("success", true);
-        result.put("message", "ZPL sent to printer (Demo Mode - check logcat)");
-        call.resolve(result);
+        // Send ZPL via TCP socket in background thread
+        Executors.newSingleThreadExecutor().execute(() -> {
+            try {
+                String host = connectedPrinterAddress;
+                int port = 9100;
+                
+                // Parse host:port format
+                if (connectedPrinterAddress.contains(":")) {
+                    String[] parts = connectedPrinterAddress.split(":");
+                    host = parts[0];
+                    port = Integer.parseInt(parts[1]);
+                }
+                
+                Log.d(TAG, "Connecting to " + host + ":" + port);
+                
+                Socket socket = new Socket(host, port);
+                socket.setSoTimeout(ZebraConfig.PRINT_SOCKET_TIMEOUT_MS);
+                
+                OutputStream outputStream = socket.getOutputStream();
+                outputStream.write(zpl.getBytes("UTF-8"));
+                outputStream.flush();
+                socket.close();
+                
+                Log.d(TAG, "ZPL sent successfully to " + host + ":" + port);
+                
+                JSObject successResult = new JSObject();
+                successResult.put("success", true);
+                successResult.put("message", "ZPL sent to printer");
+                call.resolve(successResult);
+                
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to send ZPL", e);
+                JSObject errorResult = new JSObject();
+                errorResult.put("success", false);
+                errorResult.put("message", "Print failed: " + e.getMessage());
+                call.resolve(errorResult);
+            }
+        });
     }
     
     /**
      * Discover available printers (Bluetooth and Network)
+     * Waits for network scan to complete before returning
      */
     @PluginMethod
     public void discoverPrinters(PluginCall call) {
-        JSObject result = new JSObject();
-        JSArray printersArray = new JSArray();
+        Log.d(TAG, "=== discoverPrinters CALLED ===");
         
-        try {
-            // Get paired Bluetooth printers
-            BluetoothManager bluetoothManager = (BluetoothManager) getContext()
-                .getSystemService(Context.BLUETOOTH_SERVICE);
-            BluetoothAdapter bluetoothAdapter = bluetoothManager.getAdapter();
+        // Run discovery on background thread and wait for completion
+        Executors.newSingleThreadExecutor().execute(() -> {
+            JSObject result = new JSObject();
+            JSArray printersArray = new JSArray();
             
-            if (bluetoothAdapter != null && bluetoothAdapter.isEnabled()) {
-                if (ActivityCompat.checkSelfPermission(getContext(), 
-                    Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
-                    
-                    Set<BluetoothDevice> pairedDevices = bluetoothAdapter.getBondedDevices();
-                    
-                    for (BluetoothDevice device : pairedDevices) {
-                        String name = device.getName();
-                        // Include all Bluetooth devices - user can select
-                        if (name != null) {
-                            JSObject printerObj = new JSObject();
-                            printerObj.put("name", name);
-                            printerObj.put("address", device.getAddress());
-                            printerObj.put("type", "bluetooth");
-                            printerObj.put("isOnline", true);
-                            printersArray.put(printerObj);
+            // Show toast
+            showToast("Scanning for printers...");
+            
+            try {
+                // Get paired Bluetooth printers
+                BluetoothManager bluetoothManager = (BluetoothManager) getContext()
+                    .getSystemService(Context.BLUETOOTH_SERVICE);
+                BluetoothAdapter bluetoothAdapter = bluetoothManager.getAdapter();
+                
+                if (bluetoothAdapter != null && bluetoothAdapter.isEnabled()) {
+                    if (ActivityCompat.checkSelfPermission(getContext(), 
+                        Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                        
+                        Set<BluetoothDevice> pairedDevices = bluetoothAdapter.getBondedDevices();
+                        
+                        for (BluetoothDevice device : pairedDevices) {
+                            String name = device.getName();
+                            if (name != null) {
+                                JSObject printerObj = new JSObject();
+                                printerObj.put("name", name);
+                                printerObj.put("address", device.getAddress());
+                                printerObj.put("type", "bluetooth");
+                                printerObj.put("isOnline", true);
+                                printersArray.put(printerObj);
+                                Log.d(TAG, "Found BT printer: " + name);
+                            }
                         }
                     }
                 }
+                
+                // Run network discovery synchronously
+                discoverNetworkPrintersSync(printersArray);
+                
+                result.put("success", true);
+                result.put("printers", printersArray);
+                result.put("message", "Found " + printersArray.length() + " printer(s)");
+                
+                Log.d(TAG, "discoverPrinters returning " + printersArray.length() + " printers");
+                
+                // Resolve on main thread
+                mainHandler.post(() -> call.resolve(result));
+                
+            } catch (Exception e) {
+                Log.e(TAG, "Error discovering printers", e);
+                result.put("success", false);
+                result.put("message", "Discovery failed: " + e.getMessage());
+                result.put("printers", printersArray);
+                mainHandler.post(() -> call.resolve(result));
+            }
+        });
+    }
+    
+    private void showToast(final String message) {
+        mainHandler.post(() -> {
+            android.widget.Toast.makeText(getContext(), message, android.widget.Toast.LENGTH_SHORT).show();
+        });
+    }
+    
+    /**
+     * Discover network printers synchronously - blocks until scan completes
+     */
+    private void discoverNetworkPrintersSync(JSArray printersArray) {
+        try {
+            showToast("Waking up WiFi...");
+            
+            // === WAKE UP WIFI RADIO ===
+            try {
+                String gateway = getGatewayIp();
+                if (gateway != null) {
+                    Log.d(TAG, "Pinging gateway " + gateway + " to wake WiFi");
+                    Process ping = Runtime.getRuntime().exec(String.format(ZebraConfig.PING_COMMAND_FORMAT, gateway));
+                    ping.waitFor();
+                }
+            } catch (Exception e) {
+                Log.d(TAG, "Ping failed (ok): " + e.getMessage());
             }
             
-            // Add demo network printer
-            JSObject wifiPrinter = new JSObject();
-            wifiPrinter.put("name", "Zebra ZD410 (WiFi Demo)");
-            wifiPrinter.put("address", "192.168.1.100:9100");
-            wifiPrinter.put("type", "wifi");
-            wifiPrinter.put("isOnline", true);
-            printersArray.put(wifiPrinter);
+            // Also do a DNS lookup to wake network
+            try {
+                java.net.InetAddress.getByName(ZebraConfig.WIFI_WAKEUP_HOST);
+            } catch (Exception e) {
+                // Ignore
+            }
             
-            result.put("success", true);
-            result.put("printers", printersArray);
-            call.resolve(result);
+            showToast("Starting network scan...");
+            
+            // Get local IP and subnet
+            String localIp = null;
+            
+            java.util.Enumeration<java.net.NetworkInterface> interfaces = 
+                java.net.NetworkInterface.getNetworkInterfaces();
+                
+            while (interfaces.hasMoreElements()) {
+                java.net.NetworkInterface iface = interfaces.nextElement();
+                String ifaceName = iface.getName();
+                boolean isUp = iface.isUp();
+                
+                Log.d(TAG, "Interface: " + ifaceName + " up=" + isUp);
+                
+                // Check all UP interfaces for IPv4 addresses (broader search)
+                if (isUp && !ifaceName.equals("lo")) {
+                    java.util.Enumeration<java.net.InetAddress> addresses = iface.getInetAddresses();
+                    while (addresses.hasMoreElements()) {
+                        java.net.InetAddress addr = addresses.nextElement();
+                        if (addr instanceof java.net.Inet4Address && !addr.isLoopbackAddress()) {
+                            localIp = addr.getHostAddress();
+                            Log.d(TAG, "Found IP: " + localIp + " on " + ifaceName);
+                            break;
+                        }
+                    }
+                }
+                if (localIp != null) break;
+            }
+            
+            if (localIp == null) {
+                Log.e(TAG, "No network interface found");
+                showToast("No WiFi network found");
+                return;
+            }
+            
+            showToast("My IP: " + localIp);
+            Log.d(TAG, "Local IP: " + localIp);
+            
+            // Get subnet prefix (e.g., 192.168.1)
+            String[] parts = localIp.split("\\.");
+            if (parts.length != 4) {
+                showToast("Invalid IP format: " + localIp);
+                return;
+            }
+            
+            final String subnet = parts[0] + "." + parts[1] + "." + parts[2];
+            final String myIp = localIp;
+            
+            Log.d(TAG, "Scanning subnet: " + subnet + ".*");
+            showToast("Scanning " + subnet + ".1-254");
+            
+            // Use thread pool for parallel scanning
+            java.util.concurrent.ExecutorService scanner = Executors.newFixedThreadPool(ZebraConfig.NETWORK_SCAN_THREADS);
+            final java.util.concurrent.atomic.AtomicInteger foundCount = new java.util.concurrent.atomic.AtomicInteger(0);
+            final JSArray finalPrintersArray = printersArray;
+            
+            for (int i = 1; i <= 254; i++) {
+                final String ip = subnet + "." + i;
+                if (ip.equals(myIp)) continue; // Skip own IP
+                
+                scanner.execute(() -> {
+                    if (checkPrinterAtIPSync(ip, finalPrintersArray)) {
+                        foundCount.incrementAndGet();
+                    }
+                });
+            }
+            
+            // Wait for all scans to complete
+            scanner.shutdown();
+            scanner.awaitTermination(ZebraConfig.NETWORK_SCAN_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+            
+            final int count = foundCount.get();
+            Log.d(TAG, "Network scan complete. Found: " + count);
+            showToast("Found " + count + " network printer(s)");
             
         } catch (Exception e) {
-            Log.e(TAG, "Error discovering printers", e);
-            result.put("success", false);
-            result.put("message", "Discovery failed: " + e.getMessage());
-            result.put("printers", printersArray);
-            call.resolve(result);
+            Log.e(TAG, "Network discovery error", e);
+            showToast("Scan error: " + e.getMessage());
+        }
+    }
+    
+    private boolean checkPrinterAtIPSync(String ip, JSArray printersArray) {
+        try {
+            Socket socket = new Socket();
+            socket.connect(new java.net.InetSocketAddress(ip, ZebraConfig.PRINTER_PORT), ZebraConfig.SOCKET_TIMEOUT_MS);
+            socket.close();
+            
+            Log.d(TAG, "Found printer at " + ip + ":" + ZebraConfig.PRINTER_PORT);
+            
+            JSObject printerObj = new JSObject();
+            printerObj.put("name", "Network Printer (" + ip + ")");
+            printerObj.put("address", ip + ":" + ZebraConfig.PRINTER_PORT);
+            printerObj.put("type", "network");
+            printerObj.put("isOnline", true);
+            printersArray.put(printerObj);
+            
+            return true;
+            
+        } catch (Exception e) {
+            // Printer not found at this IP, ignore
+            return false;
         }
     }
     
     /**
-     * Get list of available printers (legacy method)
+     * Get the WiFi gateway IP address
      */
-    @PluginMethod
-    public void getPrinters(PluginCall call) {
-        discoverPrinters(call);
+    private String getGatewayIp() {
+        try {
+            android.net.wifi.WifiManager wifiManager = (android.net.wifi.WifiManager) 
+                getContext().getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            android.net.DhcpInfo dhcpInfo = wifiManager.getDhcpInfo();
+            if (dhcpInfo != null) {
+                int gateway = dhcpInfo.gateway;
+                // Convert from int to IP string
+                return String.format("%d.%d.%d.%d",
+                    (gateway & 0xff),
+                    (gateway >> 8 & 0xff),
+                    (gateway >> 16 & 0xff),
+                    (gateway >> 24 & 0xff));
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error getting gateway: " + e.getMessage());
+        }
+        return null;
     }
+    
+
     
     /**
      * Check if printer is connected
@@ -501,7 +656,7 @@ public class ZebraPlugin extends Plugin {
             public void onReceive(Context context, Intent intent) {
                 String action = intent.getAction();
                 
-                if (DATAWEDGE_SCAN_ACTION.equals(action)) {
+                if (ZebraConfig.DATAWEDGE_SCAN_ACTION.equals(action)) {
                     // Handle scanned barcode from DataWedge
                     String barcodeData = intent.getStringExtra("com.symbol.datawedge.data_string");
                     String symbology = intent.getStringExtra("com.symbol.datawedge.label_type");
@@ -530,7 +685,7 @@ public class ZebraPlugin extends Plugin {
         };
         
         // Register receiver for scan events
-        IntentFilter filter = new IntentFilter(DATAWEDGE_SCAN_ACTION);
+        IntentFilter filter = new IntentFilter(ZebraConfig.DATAWEDGE_SCAN_ACTION);
         filter.addCategory(Intent.CATEGORY_DEFAULT);
         
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
@@ -544,7 +699,7 @@ public class ZebraPlugin extends Plugin {
         try {
             // Create/update DataWedge profile for this app
             Bundle profileConfig = new Bundle();
-            profileConfig.putString("PROFILE_NAME", "ZebraApp");
+            profileConfig.putString("PROFILE_NAME", ZebraConfig.DATAWEDGE_PROFILE_NAME);
             profileConfig.putString("PROFILE_ENABLED", "true");
             profileConfig.putString("CONFIG_MODE", "CREATE_IF_NOT_EXIST");
             
@@ -555,25 +710,25 @@ public class ZebraPlugin extends Plugin {
             profileConfig.putParcelableArray("APP_LIST", new Bundle[]{appConfig});
             
             Intent profileIntent = new Intent();
-            profileIntent.setAction(DATAWEDGE_SEND_ACTION);
+            profileIntent.setAction(ZebraConfig.DATAWEDGE_SEND_ACTION);
             profileIntent.putExtra("com.symbol.datawedge.api.SET_CONFIG", profileConfig);
             getContext().sendBroadcast(profileIntent);
             
             // Configure intent output for barcode data
             Bundle intentConfig = new Bundle();
-            intentConfig.putString("PROFILE_NAME", "ZebraApp");
+            intentConfig.putString("PROFILE_NAME", ZebraConfig.DATAWEDGE_PROFILE_NAME);
             intentConfig.putString("PLUGIN_NAME", "INTENT");
             intentConfig.putString("RESET_CONFIG", "false");
             
             Bundle intentParams = new Bundle();
             intentParams.putString("intent_output_enabled", "true");
-            intentParams.putString("intent_action", DATAWEDGE_SCAN_ACTION);
+            intentParams.putString("intent_action", ZebraConfig.DATAWEDGE_SCAN_ACTION);
             intentParams.putString("intent_delivery", "2"); // Broadcast intent
             
             intentConfig.putBundle("PARAM_LIST", intentParams);
             
             Intent configIntent = new Intent();
-            configIntent.setAction(DATAWEDGE_SEND_ACTION);
+            configIntent.setAction(ZebraConfig.DATAWEDGE_SEND_ACTION);
             configIntent.putExtra("com.symbol.datawedge.api.SET_CONFIG", intentConfig);
             getContext().sendBroadcast(configIntent);
             
@@ -593,29 +748,34 @@ public class ZebraPlugin extends Plugin {
             
             // Check manufacturer
             String manufacturer = android.os.Build.MANUFACTURER.toLowerCase();
-            if (manufacturer.contains("zebra") || manufacturer.contains("symbol")) {
-                Log.d(TAG, "Detected Zebra device via manufacturer: " + manufacturer);
-                return true;
+            for (String zebraMfr : ZebraConfig.ZEBRA_MANUFACTURERS) {
+                if (manufacturer.contains(zebraMfr)) {
+                    Log.d(TAG, "Detected Zebra device via manufacturer: " + manufacturer);
+                    return true;
+                }
             }
             
             // Check device model
             String model = android.os.Build.MODEL.toLowerCase();
-            if (model.contains("tc") || model.contains("mc") || model.contains("et") || 
-                model.contains("zt") || model.contains("zd") || model.contains("ws")) {
-                Log.d(TAG, "Detected Zebra device via model: " + model);
-                return true;
+            for (String prefix : ZebraConfig.ZEBRA_MODEL_PREFIXES) {
+                if (model.contains(prefix)) {
+                    Log.d(TAG, "Detected Zebra device via model: " + model);
+                    return true;
+                }
             }
             
             // Check brand
             String brand = android.os.Build.BRAND.toLowerCase();
-            if (brand.contains("zebra") || brand.contains("symbol")) {
-                Log.d(TAG, "Detected Zebra device via brand: " + brand);
-                return true;
+            for (String zebraMfr : ZebraConfig.ZEBRA_MANUFACTURERS) {
+                if (brand.contains(zebraMfr)) {
+                    Log.d(TAG, "Detected Zebra device via brand: " + brand);
+                    return true;
+                }
             }
             
             // Check if DataWedge is installed
             try {
-                Intent intent = new Intent(DATAWEDGE_SEND_ACTION);
+                Intent intent = new Intent(ZebraConfig.DATAWEDGE_SEND_ACTION);
                 List<android.content.pm.ResolveInfo> info = getContext().getPackageManager()
                     .queryIntentActivities(intent, 0);
                 if (info != null && !info.isEmpty()) {
@@ -626,7 +786,8 @@ public class ZebraPlugin extends Plugin {
                 // Ignore
             }
             
-            Log.d(TAG, "Not a Zebra device. Manufacturer: " + manufacturer + ", Model: " + model + ", Brand: " + brand);
+            Log.d(TAG, "Not a Zebra device. Manufacturer: " + manufacturer + 
+                ", Model: " + model + ", Brand: " + brand);
             return false;
         } catch (Exception e) {
             Log.e(TAG, "Error checking Zebra device", e);
@@ -638,7 +799,7 @@ public class ZebraPlugin extends Plugin {
         if (data == null) return false;
         
         String upperData = data.toUpperCase();
-        for (String pattern : ZEBRA_CONFIG_PATTERNS) {
+        for (String pattern : ZebraConfig.ZEBRA_CONFIG_PATTERNS) {
             if (upperData.startsWith(pattern.toUpperCase())) {
                 return true;
             }
